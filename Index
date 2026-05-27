@@ -1,0 +1,344 @@
+import { useState, useEffect } from "react";
+
+// ── Easter & Holidays ─────────────────────────────────────────────────────────
+function easter(Y) {
+  const a=Y%19,b=Math.floor(Y/100),c=Y%100,d=Math.floor(b/4),e=b%4,
+    f=Math.floor((b+8)/25),g=Math.floor((b-f+1)/3),h=(19*a+b-d-g+15)%30,
+    i=Math.floor(c/4),k=c%4,l=(32+2*e+2*i-h-k)%7,
+    m=Math.floor((a+11*h+22*l)/451),
+    mo=Math.floor((h+l-7*m+114)/31),
+    dy=((h+l-7*m+114)%31)+1;
+  return new Date(Y,mo-1,dy);
+}
+function addD(d,n){const r=new Date(d);r.setDate(r.getDate()+n);return r;}
+function ds(d){return d.toISOString().split("T")[0];}
+
+const BL_LIST=[
+  {code:"BW",name:"Baden-Württemberg"},{code:"BY",name:"Bayern"},
+  {code:"BE",name:"Berlin"},{code:"BB",name:"Brandenburg"},
+  {code:"HB",name:"Bremen"},{code:"HH",name:"Hamburg"},
+  {code:"HE",name:"Hessen"},{code:"MV",name:"Mecklenburg-Vorpommern"},
+  {code:"NI",name:"Niedersachsen"},{code:"NW",name:"Nordrhein-Westfalen"},
+  {code:"RP",name:"Rheinland-Pfalz"},{code:"SL",name:"Saarland"},
+  {code:"SN",name:"Sachsen"},{code:"ST",name:"Sachsen-Anhalt"},
+  {code:"SH",name:"Schleswig-Holstein"},{code:"TH",name:"Thüringen"},
+];
+
+function getHolidays(year, bl) {
+  const e=easter(year);
+  const h={
+    [ds(new Date(year,0,1))]:"Neujahr",
+    [ds(addD(e,-2))]:"Karfreitag",
+    [ds(addD(e,1))]:"Ostermontag",
+    [ds(new Date(year,4,1))]:"Tag der Arbeit",
+    [ds(addD(e,39))]:"Christi Himmelfahrt",
+    [ds(addD(e,50))]:"Pfingstmontag",
+    [ds(new Date(year,9,3))]:"Tag d. Deutschen Einheit",
+    [ds(new Date(year,11,25))]:"1. Weihnachtstag",
+    [ds(new Date(year,11,26))]:"2. Weihnachtstag",
+  };
+  if(["BW","BY","ST"].includes(bl)) h[ds(new Date(year,0,6))]="Heilige Drei Könige";
+  if(["BW","BY","HE","NW","RP","SL"].includes(bl)) h[ds(addD(e,60))]="Fronleichnam";
+  if(["BY","SL"].includes(bl)) h[ds(new Date(year,7,15))]="Mariä Himmelfahrt";
+  if(["BB","HB","HH","MV","NI","SN","ST","SH","TH"].includes(bl)) h[ds(new Date(year,9,31))]="Reformationstag";
+  if(["BW","BY","NW","RP","SL"].includes(bl)) h[ds(new Date(year,10,1))]="Allerheiligen";
+  return h;
+}
+
+// ── Time Helpers ──────────────────────────────────────────────────────────────
+function parseTime(s){const p=s?.split(":");if(!p||p.length<2)return null;const[h,m]=p.map(Number);return isNaN(h)?null:h*60+m;}
+function toHHMM(m){if(m==null)return"—";const h=Math.floor(Math.abs(m)/60),mn=Math.abs(m)%60;return`${String(h).padStart(2,"0")}:${String(mn).padStart(2,"0")}`;}
+function calcMins(start,end,pause){
+  const s=parseTime(start),e=parseTime(end);
+  if(s===null||e===null||e<=s)return null;
+  const t=e-s-(Number(pause)||0);
+  return t>0?t:0;
+}
+
+const MONTHS=["Januar","Februar","März","April","Mai","Juni","Juli","August","September","Oktober","November","Dezember"];
+const MINIJOB=556;
+let idCtr=1;
+function emptyRow(){return{id:idCtr++,date:"",start:"",end:"",pause:"30",note:""};}
+function yyyymm(y,m){return`${y}-${String(m+1).padStart(2,"0")}`;}
+
+// ── HELP CONTENT ──────────────────────────────────────────────────────────────
+const HELP=[
+  ["👤","Profil ausfüllen","Gib deinen Namen, Arbeitgeber, Bundesland und Stundenlohn ein. Alles wird automatisch gespeichert und beim nächsten Öffnen wiederhergestellt."],
+  ["📅","Monat wechseln","Mit den Pfeilen ‹ › kannst du zwischen Monaten navigieren. Jeder Monat hat seine eigenen Einträge – nichts geht verloren."],
+  ["⏱","Arbeitszeit eintragen","Datum auswählen, Von/Bis eintragen. Die Pause (in Minuten) wird automatisch abgezogen. Stunden werden sofort berechnet."],
+  ["🔴","Feiertage & Wochenenden","Feiertage werden automatisch erkannt (je nach Bundesland) und orange markiert. Wochenenden sind ebenfalls sichtbar."],
+  ["💰","Minijob-Anzeige","Mit Stundenlohn siehst du deinen Monatsverdienst live. Der Balken zeigt, wie nah du an der Minijob-Grenze (556 €) bist – mit Warnung wenn überschritten."],
+  ["📄","PDF exportieren","Öffnet ein druckfertiges Dokument. Im Browser-Druckdialog 'Als PDF speichern' wählen → fertige Datei zum Einreichen."],
+  ["📊","CSV exportieren","Speichert eine Tabellendatei (.csv) für Excel, LibreOffice oder den Steuerberater."],
+  ["🌙","Dark / Light Mode","Oben rechts umschalten – Einstellung wird gespeichert."],
+];
+
+export default function Stundenzettel() {
+  const now=new Date();
+  const [curY,setCurY]=useState(now.getFullYear());
+  const [curM,setCurM]=useState(now.getMonth());
+  const [profile,setProfile]=useState({name:"",employer:"",bundesland:"NW",hourlyRate:""});
+  const [allData,setAllData]=useState({});
+  const [theme,setTheme]=useState("dark");
+  const [showHelp,setShowHelp]=useState(false);
+  const [loaded,setLoaded]=useState(false);
+
+  const key=yyyymm(curY,curM);
+  const rows=allData[key]||(allData[key]=[emptyRow(),emptyRow(),emptyRow()],allData[key]);
+  const holidays=getHolidays(curY,profile.bundesland);
+
+  // ── Storage Load ──────────────────────────────────────────────────────────
+  useEffect(()=>{
+    (async()=>{
+      try{
+        const p=await window.storage.get("stz_profile");
+        if(p) setProfile(JSON.parse(p.value));
+      }catch{}
+      try{
+        const d=await window.storage.get("stz_data");
+        if(d) setAllData(JSON.parse(d.value));
+      }catch{}
+      try{
+        const t=await window.storage.get("stz_theme");
+        if(t) setTheme(t.value);
+      }catch{}
+      setLoaded(true);
+    })();
+  },[]);
+
+  useEffect(()=>{
+    if(!loaded)return;
+    (async()=>{
+      try{await window.storage.set("stz_profile",JSON.stringify(profile));}catch{}
+      try{await window.storage.set("stz_data",JSON.stringify(allData));}catch{}
+      try{await window.storage.set("stz_theme",theme);}catch{}
+    })();
+  },[profile,allData,theme,loaded]);
+
+  // ── Row helpers ───────────────────────────────────────────────────────────
+  function setRows(fn){
+    setAllData(prev=>{
+      const cur=prev[key]||[emptyRow()];
+      const next=typeof fn==="function"?fn(cur):fn;
+      return{...prev,[key]:next};
+    });
+  }
+  function updateRow(i,field,val){
+    setRows(prev=>{const n=[...prev];n[i]={...n[i],[field]:val};return n;});
+  }
+
+  // ── Calculations ──────────────────────────────────────────────────────────
+  const totalMins=rows.reduce((acc,r)=>acc+(calcMins(r.start,r.end,r.pause)??0),0);
+  const totalHours=totalMins/60;
+  const rate=parseFloat(profile.hourlyRate)||0;
+  const earnings=rate?totalHours*rate:null;
+  const over=earnings!==null&&earnings>MINIJOB;
+  const pct=earnings!==null?Math.min((earnings/MINIJOB)*100,100):null;
+  const filledRows=rows.filter(r=>r.start&&r.end);
+
+  // ── Navigation ────────────────────────────────────────────────────────────
+  function prevM(){if(curM===0){setCurY(y=>y-1);setCurM(11);}else setCurM(m=>m-1);}
+  function nextM(){if(curM===11){setCurY(y=>y+1);setCurM(0);}else setCurM(m=>m+1);}
+
+  // ── CSV Export ────────────────────────────────────────────────────────────
+  function exportCSV(){
+    const header="Datum,Von,Bis,Pause (min),Stunden,Notiz\n";
+    const body=rows.map(r=>{
+      const m=calcMins(r.start,r.end,r.pause);
+      const note=holidays[r.date]||r.note||"";
+      return`${r.date},${r.start||""},${r.end||""},${r.pause},${m!==null?toHHMM(m):""},${note}`;
+    }).join("\n");
+    const blob=new Blob(["\uFEFF"+header+body],{type:"text/csv;charset=utf-8"});
+    const a=document.createElement("a");
+    a.href=URL.createObjectURL(blob);
+    a.download=`Stundenzettel_${MONTHS[curM]}_${curY}.csv`;
+    a.click();
+  }
+
+  // ── PDF Export ────────────────────────────────────────────────────────────
+  function exportPDF(){
+    const win=window.open("","_blank","width=820,height=1080");
+    if(!win)return;
+    const blName=BL_LIST.find(b=>b.code===profile.bundesland)?.name||"";
+    const rowsHTML=rows.map(r=>{
+      const m=calcMins(r.start,r.end,r.pause);
+      const hol=r.date&&holidays[r.date];
+      const we=r.date&&[0,6].includes(new Date(r.date).getDay());
+      const bg=hol?"#fff8ec":we?"#f8f8f8":"#fff";
+      const noteCell=hol?`<span style="color:#c87a20">🔴 ${hol}</span>`:r.note||"";
+      return`<tr style="background:${bg}"><td>${r.date||""}</td><td>${r.start||""}</td><td>${r.end||""}</td><td style="text-align:center">${r.pause||0} min</td><td style="font-weight:600;text-align:right">${m!==null?toHHMM(m):"—"}</td><td>${noteCell}</td></tr>`;
+    }).join("");
+    const earRow=earnings!==null?`<tr><td colspan="4" style="text-align:right;padding-top:6px;color:#555">Stundenlohn: ${rate.toFixed(2).replace(".",",")} €/Std</td><td colspan="2" style="font-weight:700;font-size:15px;text-align:right;padding-top:6px">${earnings.toFixed(2).replace(".",",")} €${over?` <span style="color:red">⚠️ Limit!</span>`:""}</td></tr>`:"";
+    win.document.write(`<!DOCTYPE html><html><head><meta charset="utf-8">
+    <title>Stundenzettel ${MONTHS[curM]} ${curY}</title>
+    <style>
+      *{box-sizing:border-box;margin:0;padding:0;}
+      body{font-family:'Helvetica Neue',Arial,sans-serif;padding:40px;color:#111;font-size:13px;max-width:780px;margin:0 auto;}
+      h1{font-size:26px;font-weight:900;letter-spacing:-1px;margin-bottom:2px;}
+      .sub{color:#999;font-size:11px;letter-spacing:2px;margin-bottom:24px;}
+      .meta{display:grid;grid-template-columns:1fr 1fr 1fr 1fr;gap:0;border:1px solid #ddd;border-radius:6px;overflow:hidden;margin-bottom:24px;}
+      .meta-cell{padding:10px 14px;border-right:1px solid #ddd;}
+      .meta-cell:last-child{border-right:none;}
+      .meta-label{font-size:9px;color:#aaa;letter-spacing:1.5px;margin-bottom:3px;}
+      .meta-val{font-size:13px;font-weight:600;}
+      table{width:100%;border-collapse:collapse;margin-bottom:20px;}
+      th{background:#111;color:#fff;padding:9px 12px;text-align:left;font-size:10px;letter-spacing:1px;}
+      td{padding:8px 12px;border-bottom:1px solid #eee;font-size:12px;}
+      .total-box{background:#f5f5f5;border-radius:6px;padding:16px 20px;margin-bottom:32px;display:flex;justify-content:space-between;align-items:center;}
+      .total-hours{font-size:32px;font-weight:900;letter-spacing:-1px;}
+      .sig{display:grid;grid-template-columns:1fr 1fr;gap:48px;margin-top:40px;}
+      .sig-line{border-top:1px solid #bbb;padding-top:6px;font-size:10px;color:#aaa;letter-spacing:1px;}
+      @media print{body{padding:20px;}}
+    </style></head><body>
+    <h1>STUNDENZETTEL</h1>
+    <div class="sub">ARBEITSZEITERFASSUNG · ${MONTHS[curM].toUpperCase()} ${curY}</div>
+    <div class="meta">
+      <div class="meta-cell"><div class="meta-label">NAME</div><div class="meta-val">${profile.name||"—"}</div></div>
+      <div class="meta-cell"><div class="meta-label">ARBEITGEBER</div><div class="meta-val">${profile.employer||"—"}</div></div>
+      <div class="meta-cell"><div class="meta-label">BUNDESLAND</div><div class="meta-val">${blName}</div></div>
+      <div class="meta-cell"><div class="meta-label">MONAT</div><div class="meta-val">${MONTHS[curM]} ${curY}</div></div>
+    </div>
+    <table>
+      <thead><tr><th>DATUM</th><th>VON</th><th>BIS</th><th>PAUSE</th><th style="text-align:right">STUNDEN</th><th>NOTIZ / FEIERTAG</th></tr></thead>
+      <tbody>${rowsHTML}<tr style="background:#f9f9f9;font-weight:700"><td colspan="4" style="text-align:right;padding-top:10px">GESAMT</td><td style="text-align:right;font-size:15px;padding-top:10px">${toHHMM(totalMins)}</td><td style="padding-top:10px">${filledRows.length} Arbeitstag(e)</td></tr>${earRow}</tbody>
+    </table>
+    ${over?`<div style="background:#fff0f0;border:1px solid #ffaaaa;border-radius:6px;padding:12px 16px;margin-bottom:20px;color:#cc3333;font-weight:600">⚠️ Achtung: Minijob-Grenze (${MINIJOB} €) wurde überschritten!</div>`:""}
+    <div class="sig"><div class="sig-line">UNTERSCHRIFT ARBEITNEHMER</div><div class="sig-line">UNTERSCHRIFT ARBEITGEBER</div></div>
+    <script>window.onload=()=>{setTimeout(()=>window.print(),300);}<\/script>
+    </body></html>`);
+    win.document.close();
+  }
+
+  // ── Theme ─────────────────────────────────────────────────────────────────
+  const dk=theme==="dark";
+  const C={
+    bg:dk?"#0d0d0d":"#f2f0ec",
+    card:dk?"#141414":"#ffffff",
+    border:dk?"#1e1e1e":"#dedad4",
+    text:dk?"#e8e0d0":"#1a1a1a",
+    muted:dk?"#505050":"#888",
+    accent:"#c8a96e",
+    rowBg:dk?"#0f0f0f":"#fafaf8",
+    rowHol:dk?"#1a1508":"#fffbf0",
+    danger:"#e05555",
+    success:"#5a9e6f",
+  };
+  const inp={background:"transparent",color:C.text,border:"none",outline:"none",fontFamily:"'DM Mono',monospace",width:"100%",fontSize:"13px"};
+
+  return(
+    <div style={{minHeight:"100vh",background:C.bg,fontFamily:"'DM Mono','Courier New',monospace",color:C.text,transition:"background 0.2s,color 0.2s"}}>
+      <style>{`
+        @import url('https://fonts.googleapis.com/css2?family=DM+Mono:wght@300;400;500&family=Syne:wght@700;800&display=swap');
+        *{box-sizing:border-box;margin:0;padding:0;}
+        input[type=number]::-webkit-inner-spin-button{-webkit-appearance:none;}
+        input[type=date],input[type=time]{color-scheme:${dk?"dark":"light"};}
+        input::placeholder{color:${C.muted};}
+        select option{background:${dk?"#1a1a1a":"#fff"};color:${C.text};}
+        .btn{cursor:pointer;border:none;transition:all 0.15s;}
+        .btn:hover{opacity:0.82;}
+        .trow:hover{background:${dk?"#161616":"#f5f2ee"} !important;}
+        .ri{animation:ri 0.15s ease;}
+        @keyframes ri{from{opacity:0;transform:translateY(-3px)}to{opacity:1}}
+        ::-webkit-scrollbar{width:4px;}
+        ::-webkit-scrollbar-thumb{background:${C.border};}
+        select{background:transparent;color:${C.text};border:none;outline:none;font-family:'DM Mono',monospace;font-size:12px;width:100%;}
+      `}</style>
+
+      {/* ── HEADER ── */}
+      <div style={{borderBottom:`1px solid ${C.border}`,padding:"18px 24px",display:"flex",alignItems:"center",justifyContent:"space-between",gap:"12px",flexWrap:"wrap"}}>
+        <div>
+          <div style={{fontFamily:"'Syne',sans-serif",fontSize:"clamp(18px,4vw,26px)",fontWeight:800,letterSpacing:"-0.5px",lineHeight:1}}>STUNDENZETTEL</div>
+          <div style={{fontSize:"9px",color:C.muted,marginTop:"3px",letterSpacing:"2px"}}>ARBEITSZEITERFASSUNG · DEUTSCHLAND</div>
+        </div>
+        <div style={{display:"flex",gap:"8px",alignItems:"center"}}>
+          <button className="btn" onClick={()=>setTheme(t=>t==="dark"?"light":"dark")}
+            style={{background:C.card,border:`1px solid ${C.border}`,color:C.text,padding:"8px 12px",borderRadius:"6px",fontSize:"14px"}}>
+            {dk?"☀️":"🌙"}
+          </button>
+          <button className="btn" onClick={()=>setShowHelp(true)}
+            title="Hilfe / Anleitung"
+            style={{background:C.accent,color:"#0d0d0d",width:"36px",height:"36px",borderRadius:"50%",fontWeight:700,fontSize:"15px",fontFamily:"'Syne',sans-serif",flexShrink:0}}>
+            ?
+          </button>
+        </div>
+      </div>
+
+      <div style={{padding:"20px 24px",maxWidth:"960px",margin:"0 auto"}}>
+
+        {/* ── PROFILE ── */}
+        <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fit,minmax(150px,1fr))",gap:"12px",marginBottom:"20px",padding:"16px 18px",background:C.card,borderRadius:"8px",border:`1px solid ${C.border}`}}>
+          {[
+            {label:"Name",k:"name",ph:"Dein Name"},
+            {label:"Arbeitgeber",k:"employer",ph:"Firma / Person"},
+            {label:"Stundenlohn (€)",k:"hourlyRate",ph:"z.B. 12.82",tp:"number"},
+          ].map(f=>(
+            <div key={f.k} style={{borderBottom:`1px solid ${C.border}`,paddingBottom:"6px"}}>
+              <div style={{fontSize:"9px",color:C.muted,letterSpacing:"1.5px",marginBottom:"3px"}}>{f.label.toUpperCase()}</div>
+              <input type={f.tp||"text"} value={profile[f.k]}
+                onChange={e=>setProfile(p=>({...p,[f.k]:e.target.value}))}
+                placeholder={f.ph} style={inp} />
+            </div>
+          ))}
+          <div style={{borderBottom:`1px solid ${C.border}`,paddingBottom:"6px"}}>
+            <div style={{fontSize:"9px",color:C.muted,letterSpacing:"1.5px",marginBottom:"3px"}}>BUNDESLAND</div>
+            <select value={profile.bundesland} onChange={e=>setProfile(p=>({...p,bundesland:e.target.value}))}>
+              {BL_LIST.map(b=><option key={b.code} value={b.code}>{b.name}</option>)}
+            </select>
+          </div>
+        </div>
+
+        {/* ── MONTH NAV ── */}
+        <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:"16px"}}>
+          <button className="btn" onClick={prevM} style={{background:C.card,border:`1px solid ${C.border}`,color:C.text,padding:"8px 18px",borderRadius:"6px",fontSize:"20px",lineHeight:1}}>‹</button>
+          <div style={{textAlign:"center"}}>
+            <div style={{fontFamily:"'Syne',sans-serif",fontSize:"22px",fontWeight:800,lineHeight:1}}>{MONTHS[curM]}</div>
+            <div style={{fontSize:"12px",color:C.muted,marginTop:"2px"}}>{curY}</div>
+          </div>
+          <button className="btn" onClick={nextM} style={{background:C.card,border:`1px solid ${C.border}`,color:C.text,padding:"8px 18px",borderRadius:"6px",fontSize:"20px",lineHeight:1}}>›</button>
+        </div>
+
+        {/* ── MINIJOB BAR ── */}
+        {pct!==null&&(
+          <div style={{marginBottom:"16px",padding:"14px 16px",background:C.card,border:`1px solid ${over?C.danger:C.border}`,borderRadius:"8px",transition:"border-color 0.2s"}}>
+            <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:"8px",fontSize:"12px"}}>
+              <span style={{color:C.muted}}>💰 Minijob-Status</span>
+              <span style={{color:over?C.danger:C.accent,fontWeight:600}}>
+                {over
+                  ?`⚠️ ${(earnings-MINIJOB).toFixed(2).replace(".",",")} € über der Grenze!`
+                  :`${earnings.toFixed(2).replace(".",",")} € / ${MINIJOB} €`}
+              </span>
+            </div>
+            <div style={{height:"6px",background:C.border,borderRadius:"3px",overflow:"hidden"}}>
+              <div style={{height:"100%",width:`${pct}%`,background:over?C.danger:C.accent,borderRadius:"3px",transition:"width 0.4s ease"}}/>
+            </div>
+            <div style={{fontSize:"11px",color:C.muted,marginTop:"6px"}}>
+              {over
+                ?`Grenze überschritten – beim Arbeitgeber klären!`
+                :`Noch ${(MINIJOB-earnings).toFixed(2).replace(".",",")} € bis zur Minijob-Grenze (${MINIJOB} €)`}
+            </div>
+          </div>
+        )}
+
+        {/* ── TABLE HEADER ── */}
+        <div style={{display:"grid",gridTemplateColumns:"102px 74px 74px 72px 58px 1fr 26px",gap:"6px",padding:"8px 12px",background:C.card,borderRadius:"6px 6px 0 0",fontSize:"9px",color:C.muted,letterSpacing:"1.5px",border:`1px solid ${C.border}`,borderBottom:"none"}}>
+          <span>DATUM</span><span>VON</span><span>BIS</span><span>PAUSE</span><span>STD</span><span>NOTIZ</span><span/>
+        </div>
+
+        {/* ── ROWS ── */}
+        <div style={{border:`1px solid ${C.border}`,borderRadius:"0 0 6px 6px",overflow:"hidden"}}>
+          {rows.map((row,i)=>{
+            const mins=calcMins(row.start,row.end,row.pause);
+            const hol=row.date&&holidays[row.date];
+            const we=row.date&&[0,6].includes(new Date(row.date).getDay());
+            return(
+              <div key={row.id} className="trow ri" style={{
+                display:"grid",gridTemplateColumns:"102px 74px 74px 72px 58px 1fr 26px",
+                gap:"6px",padding:"10px 12px",
+                background:hol?C.rowHol:C.rowBg,
+                borderBottom:`1px solid ${C.border}`,
+                alignItems:"center",
+                borderLeft:`2px solid ${mins!==null?C.accent:"transparent"}`,
+                transition:"background 0.1s,border-left-color 0.2s",
+              }}>
+                <input type="date" value={row.date} onChange={e=>updateRow(i,"date",e.target.value)} style={{...inp,fontSize:"12px"}}/>
+                <input type="time" value={row.start} onChange={e=>updateRow(i,"start",e.target.value)} placeholder="08:00" style
